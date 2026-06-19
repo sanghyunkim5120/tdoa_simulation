@@ -389,18 +389,20 @@ def render_charts():
         st.session_state.noisy_pairs = pairs_to_list(noisy)
         st.session_state.active_pairs = active_pairs
 
-    # 차트 렌더링
+    # 차트 렌더링 (key를 고정하면 Plotly.react()로 데이터만 교체 → 깜빡임 없음)
     col1, col2 = st.columns(2)
     with col1:
         st.plotly_chart(
             build_earth_fig(satellites, user_position, st.session_state.show_actual),
             use_container_width=True,
+            key='earth_chart',
         )
     with col2:
         st.plotly_chart(
             build_tdoa_fig(satellites, user_position, noisy_pairs,
                            active_pairs, st.session_state.show_actual, n_sat),
             use_container_width=True,
+            key='tdoa_chart',
         )
 
         if noisy_pairs and active_pairs > 0:
