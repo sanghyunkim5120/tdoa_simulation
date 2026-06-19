@@ -1,4 +1,3 @@
-import time
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
@@ -53,6 +52,9 @@ def pairs_to_list(pairs):
 def list_to_pairs(lst):
     return [(np.array(x[0]), np.array(x[1]), float(x[2]), int(x[3]), int(x[4]))
             for x in lst]
+
+def _term(axis, val):
+    return f'{axis}-{val:.0f}' if val >= 0 else f'{axis}+{abs(val):.0f}'
 
 # ── 상태 초기화 ───────────────────────────────────────────────
 def init_state():
@@ -185,7 +187,6 @@ def build_tdoa_fig(satellites, user_position, noisy_pairs, active_pairs,
             color = HYPER_COLORS[idx % len(HYPER_COLORS)]
             eps = max(abs(delta_d) * 0.001, 0.5)
 
-            # 주 쌍곡선
             fig.add_trace(go.Contour(
                 x=x1d_h, y=x1d_h, z=Zh,
                 contours=dict(start=delta_d, end=delta_d + eps, size=2 * eps,
@@ -193,7 +194,6 @@ def build_tdoa_fig(satellites, user_position, noisy_pairs, active_pairs,
                 line=dict(color=color, width=2),
                 showscale=False, hoverinfo='skip', showlegend=False,
             ))
-            # 대칭 브랜치 (점선)
             if delta_d != 0:
                 nd = -delta_d
                 fig.add_trace(go.Contour(
@@ -205,7 +205,6 @@ def build_tdoa_fig(satellites, user_position, noisy_pairs, active_pairs,
                     showscale=False, hoverinfo='skip', showlegend=False,
                 ))
 
-        # 추정 위치
         all_shown = active_pairs >= len(noisy_pairs) > 0
         if all_shown and n_sat == 3:
             peaks = _find_peaks(score, X, Y, max_peaks=2)
@@ -227,7 +226,6 @@ def build_tdoa_fig(satellites, user_position, noisy_pairs, active_pairs,
                 showlegend=False,
             ))
 
-    # 위성 위치
     for sat in satellites:
         p = sat.get_position_2d()
         fig.add_trace(go.Scatter(
@@ -240,7 +238,6 @@ def build_tdoa_fig(satellites, user_position, noisy_pairs, active_pairs,
             showlegend=False,
         ))
 
-    # 실제 위치
     if show_actual and user_position:
         pu = user_position.get_position_2d()
         fig.add_trace(go.Scatter(
@@ -304,7 +301,6 @@ with st.sidebar:
     st.markdown('## 🛰️ TDOA 시뮬레이션')
     st.markdown('---')
 
-    # 위성 제어
     st.markdown('**▌ 위성 제어**')
     ca, cb = st.columns(2)
     with ca:
@@ -331,7 +327,6 @@ with st.sidebar:
 
     st.markdown('---')
 
-    # 계산 제어
     st.markdown('**▌ 위치 계산**')
     if st.session_state.calculating:
         if st.button('■ 계산 중지', use_container_width=True):
@@ -348,7 +343,6 @@ with st.sidebar:
 
     st.markdown('---')
 
-    # 결과
     st.markdown('**▌ 결과**')
     if st.button('★ 실제 위치 보기/숨기기', use_container_width=True):
         st.session_state.show_actual = not st.session_state.show_actual
@@ -363,7 +357,6 @@ with st.sidebar:
 
     st.markdown('---')
 
-    # 상태 표시
     n_display = len(st.session_state.satellites)
     total_pairs = n_display * (n_display - 1) // 2
     st.markdown(f'**상태:** {st.session_state.status}')
@@ -371,62 +364,57 @@ with st.sidebar:
     if st.session_state.calculating:
         st.info('🔄 계산 & 애니메이션 진행 중')
 
-# ── 객체 복원 (사이드바 변경 이후) ───────────────────────────
-satellites = [dict_to_sat(d) for d in st.session_state.satellites]
-user_position = UserPosition(st.session_state.user_lat, st.session_state.user_lon)
-noisy_pairs = (list_to_pairs(st.session_state.noisy_pairs)
-               if st.session_state.noisy_pairs else [])
-n_sat = len(satellites)
+# ── 차트 + 애니메이션 (fragment: 사이드바 깜빡임 없이 차트만 갱신) ──
+@st.fragment(run_every=ANIM_DT if st.session_state.calculating else None)
+def render_charts():
+    # 최신 상태 읽기
+    satellites = [dict_to_sat(d) for d in st.session_state.satellites]
+    user_position = UserPosition(st.session_state.user_lat, st.session_state.user_lon)
+    n_sat = len(satellites)
+    noisy_pairs = (list_to_pairs(st.session_state.noisy_pairs)
+                   if st.session_state.noisy_pairs else [])
+    active_pairs = st.session_state.active_pairs
 
-# ── 메인 차트 ─────────────────────────────────────────────────
-col1, col2 = st.columns(2)
+    # 계산 중일 때만 궤도 갱신 + TDOA 재계산
+    if st.session_state.calculating and n_sat >= 2:
+        for sat in satellites:
+            sat.update(ANIM_DT)
+        st.session_state.satellites = [sat_to_dict(s) for s in satellites]
 
-with col1:
-    st.plotly_chart(
-        build_earth_fig(satellites, user_position, st.session_state.show_actual),
-        use_container_width=True,
-    )
-
-with col2:
-    st.plotly_chart(
-        build_tdoa_fig(satellites, user_position, noisy_pairs,
-                       st.session_state.active_pairs,
-                       st.session_state.show_actual, n_sat),
-        use_container_width=True,
-    )
-
-    # 쌍곡선 방정식 패널
-    if noisy_pairs and st.session_state.active_pairs > 0:
-        def _term(axis, val):
-            return f'{axis}-{val:.0f}' if val >= 0 else f'{axis}+{abs(val):.0f}'
-
-        with st.expander('쌍곡선 방정식', expanded=True):
-            for idx, (pi, pj, delta_d, id_i, id_j) in enumerate(
-                    noisy_pairs[:st.session_state.active_pairs]):
-                color = HYPER_COLORS[idx % len(HYPER_COLORS)]
-                eq = (f'H{idx + 1} S{id_i}-S{id_j}: '
-                      f'√(({_term("x", pi[0])})²+({_term("y", pi[1])})²) '
-                      f'− √(({_term("x", pj[0])})²+({_term("y", pj[1])})²) '
-                      f'= {delta_d:+.0f} km')
-                st.markdown(
-                    f'<code style="color:{color}">{eq}</code>',
-                    unsafe_allow_html=True,
-                )
-
-# ── 애니메이션 루프 ───────────────────────────────────────────
-if st.session_state.calculating:
-    # 궤도 갱신
-    for sat in satellites:
-        sat.update(ANIM_DT)
-    st.session_state.satellites = [sat_to_dict(s) for s in satellites]
-
-    # TDOA 계산
-    if n_sat >= 2:
         rng = np.random.default_rng()
         true_pairs = compute_tdoa_pairs(satellites, user_position)
         noisy = add_measurement_noise(true_pairs, rng)
+        noisy_pairs = noisy
+        active_pairs = n_sat * (n_sat - 1) // 2
         st.session_state.noisy_pairs = pairs_to_list(noisy)
-        st.session_state.active_pairs = n_sat * (n_sat - 1) // 2
+        st.session_state.active_pairs = active_pairs
 
-    time.sleep(ANIM_DT)
-    st.rerun()
+    # 차트 렌더링
+    col1, col2 = st.columns(2)
+    with col1:
+        st.plotly_chart(
+            build_earth_fig(satellites, user_position, st.session_state.show_actual),
+            use_container_width=True,
+        )
+    with col2:
+        st.plotly_chart(
+            build_tdoa_fig(satellites, user_position, noisy_pairs,
+                           active_pairs, st.session_state.show_actual, n_sat),
+            use_container_width=True,
+        )
+
+        if noisy_pairs and active_pairs > 0:
+            with st.expander('쌍곡선 방정식', expanded=True):
+                for idx, (pi, pj, delta_d, id_i, id_j) in enumerate(
+                        noisy_pairs[:active_pairs]):
+                    color = HYPER_COLORS[idx % len(HYPER_COLORS)]
+                    eq = (f'H{idx + 1} S{id_i}-S{id_j}: '
+                          f'√(({_term("x", pi[0])})²+({_term("y", pi[1])})²) '
+                          f'− √(({_term("x", pj[0])})²+({_term("y", pj[1])})²) '
+                          f'= {delta_d:+.0f} km')
+                    st.markdown(
+                        f'<code style="color:{color}">{eq}</code>',
+                        unsafe_allow_html=True,
+                    )
+
+render_charts()
